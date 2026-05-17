@@ -2,55 +2,48 @@
 // point for the concurrent-Windows+WSL-backend feature; see the design
 // notes below before extending it.
 //
-// Current state (step 4):
-//   - `DesktopBackendManager.ts` no longer exposes a Context.Service. It
-//     is a per-instance factory (`makeBackendInstance(spec)`); the pool
-//     calls it once for the Windows primary at startup.
-//   - The primary spec wires `configResolve` to `DesktopBackendConfiguration`
-//     and the `onReady`/`onShutdown` callbacks to the window service's
-//     `handleBackendReady` / `handleBackendNotReady`. Readiness is no
-//     longer in `DesktopState`; the window owns its own latch.
-//   - The pool exposes `register(spec)` and `unregister(id)` so other
-//     services can attach a backend on demand. Each registered instance
-//     gets its own child scope so unregister can stop it cleanly without
-//     tearing down the whole pool.
+// Current state (step 5):
+//   - `DesktopBackendManager.ts` exposes a per-instance factory
+//     (`makeBackendInstance(spec)`); the pool calls it once for the
+//     Windows primary at startup, and `DesktopWslBackend.reconcile`
+//     calls it through `pool.register` to bring up the WSL instance
+//     when the user enables it.
+//   - The primary spec wires `configResolve` to
+//     `DesktopBackendConfiguration.resolvePrimary` and the
+//     `onReady`/`onShutdown` callbacks to the window service. WSL
+//     instances wire `configResolve: configuration.resolveWsl(...)`
+//     and skip onReady/onShutdown — the window only follows the primary.
+//   - The pool exposes `register(spec)` and `unregister(id)`. Each
+//     registered instance gets its own child scope, so unregister can
+//     stop it cleanly without tearing down the pool. The primary's id
+//     refuses unregister.
 //   - Consumers (window/wsl IPC, lifecycle hooks, telemetry) read the
 //     primary instance off `pool.primary`. There is no longer a separate
 //     `DesktopBackendManager` service in the layer graph.
+//   - Settings: `wslBackendEnabled: boolean` + `wslDistro: string | null`.
+//     The legacy `wslMode: "local" | "wsl"` swap setting is migrated on
+//     load. IPC is `setWslBackendEnabled(boolean)` + `setWslDistro(...)`,
+//     both of which persist and then call the orchestrator's reconcile.
 //
-// Target state (concurrent Windows + WSL):
-//   - The pool layer constructs N instances — at minimum the Windows
-//     primary; the WSL instance is added when the user enables the WSL
-//     backend (with the selected distro).
-//   - Per-instance state (readiness, restart fiber, active run) lives on
-//     each `DesktopBackendInstance`. Step 3 splits backend log routing
-//     per instance.
-//   - `getLocalEnvironmentBootstrap()` widens to
-//     `getLocalEnvironmentBootstraps()` returning one bootstrap per pool
-//     instance; the frontend env runtime registers each as a local
-//     environment.
-//   - The WSL "swap" IPC is replaced by `enableWslBackend()` +
-//     `setWslBackendDistro()` controlling which (if any) WSL instance the
-//     pool holds. No more swap-mode, no more rollback-on-restart.
+// What's left (steps 6+):
+//   - `getLocalEnvironmentBootstrap()` widens to `*Bootstraps()` so the
+//     frontend env runtime can register one local environment per pool
+//     instance.
+//   - pickFolder IPC takes a `targetEnvironmentId` so opening a folder
+//     routes to the right backend's filesystem (primary vs. WSL).
+//   - Settings UX in the web app: the WSL "swap dialog" gets replaced
+//     by a plain enable toggle + distro picker pair.
 //
-// Migration sequence (each step is its own commit):
+// Migration history (commits):
 //   1. Reshape `DesktopBackendManager` into an instance factory and route
-//      consumers through the pool. Pool still holds a single instance.
+//      consumers through the pool. Pool held a single instance. (a8fc7845)
 //   2. Drop `DesktopState.backendReady`. The window owns its own
-//      readiness latch, driven by the primary instance's onReady /
-//      onShutdown callbacks.
-//   3. Per-instance log routing: replace the singleton
-//      DesktopBackendOutputLog with a factory that vends one rotating
-//      writer per instance id (primary keeps server-child.log; others go
-//      to server-child-<sanitized-id>.log).
-//   4. (this commit) Add register/unregister so WSL backend can be added
-//      on demand. No caller registers a second instance yet.
-//   5. Wire WSL distro startup through the pool; remove `setWslBackend`
-//      mode-swap IPC in favor of `enableWslBackend` / `setWslDistro`.
-//   6. Widen `getLocalEnvironmentBootstrap` → `*Bootstraps`; frontend
-//      runtime registers each pool instance as a local environment.
-//   7. Drop the swap dialog + the "mode" appSetting. Settings UI gets a
-//      "WSL backend enabled + distro" pair instead.
+//      readiness latch via onReady / onShutdown callbacks. (425c7d0b)
+//   3. Per-instance log routing via DesktopBackendOutputLogFactory. (563820ed)
+//   4. Add register/unregister to the pool. (a0eaf560)
+//   5. Wire WSL through the pool: settings rename, BackendConfiguration
+//      split, DesktopWslBackend orchestrator, new IPC, web compat.
+//      (b1622191 + 31ce3add + 627c80cb)
 
 import * as Context from "effect/Context";
 import * as Data from "effect/Data";
