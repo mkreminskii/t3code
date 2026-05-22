@@ -725,6 +725,7 @@ export function ThreadTerminalRouteScreen() {
     router,
     selectedThread?.environmentId,
     selectedThread?.id,
+    selectedThreadDetail?.worktreePath,
     selectedThreadProject?.workspaceRoot,
     terminalId,
   ]);

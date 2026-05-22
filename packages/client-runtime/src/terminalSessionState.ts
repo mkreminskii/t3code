@@ -242,16 +242,24 @@ function latestTimestamp(left: string | null, right: string | null): string | nu
   return Date.parse(left) >= Date.parse(right) ? left : right;
 }
 
+function isBufferTerminalStatus(buffer: TerminalBufferState): boolean {
+  return (
+    buffer.version > 0 &&
+    (buffer.status === "exited" || buffer.status === "closed" || buffer.status === "error")
+  );
+}
+
 function combineSessionState(
   summary: TerminalSummary | null,
   buffer: TerminalBufferState,
 ): TerminalSessionState {
+  const bufferTerminal = isBufferTerminalStatus(buffer);
   return {
     summary,
     buffer: buffer.buffer,
-    status: summary?.status ?? buffer.status,
+    status: bufferTerminal ? buffer.status : (summary?.status ?? buffer.status),
     error: buffer.error,
-    hasRunningSubprocess: summary?.hasRunningSubprocess ?? false,
+    hasRunningSubprocess: bufferTerminal ? false : (summary?.hasRunningSubprocess ?? false),
     updatedAt: latestTimestamp(summary?.updatedAt ?? null, buffer.updatedAt),
     version: buffer.version,
   };
