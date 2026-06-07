@@ -154,8 +154,8 @@ interface SharedBootstrapInput {
 interface WslPreflightOutcome {
   readonly _tag: "Ready";
   readonly linuxEntryPath: string;
-  // Absolute path to the node binary the preflight validated (after sourcing
-  // the user's version managers). The launch must use this exact path so it
+  // Absolute path to the node binary the preflight validated after the shared
+  // remote resolver repaired PATH. The launch must use this exact path so it
   // doesn't fall through to a different/old node than the one node-pty was
   // built against.
   readonly nodePath: string;
@@ -448,10 +448,10 @@ const resolveWslStartConfig = Effect.fn("desktop.backendConfiguration.resolveWsl
     args: [
       ...distroArgs,
       "--",
-      // Absolute node path resolved by the preflight (sourcing nvm/fnm/asdf/
-      // volta). `wsl.exe -- node` would run against the bare non-login PATH and
-      // hit /usr/bin/node instead of the version-managed node node-pty was
-      // built against.
+      // Absolute node path resolved by the preflight after the shared remote
+      // resolver repaired PATH. `wsl.exe -- node` would run against the bare
+      // non-login PATH and hit /usr/bin/node instead of the version-managed
+      // node node-pty was built against.
       preflight.nodePath,
       preflight.linuxEntryPath,
       "--bootstrap-fd",

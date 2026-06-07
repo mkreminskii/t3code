@@ -8,6 +8,7 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
+import { buildRemoteNodeEnvScript } from "@t3tools/ssh/tunnel";
 import { satisfiesSemverRange } from "@t3tools/shared/semver";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -86,23 +87,12 @@ interface ShellResult {
 
 const TIMEOUT_RESULT: ShellResult = { exitCode: 124, stdout: "", stderr: "\n[timeout]" };
 
-// nvm / fnm / asdf / volta install their shell hooks at the BOTTOM of
-// ~/.bashrc, below the `case $- in *i*) ;; *) return` interactive guard, so a
-// non-interactive `bash -l` returns before reaching them and `node` falls
-// through to the system /usr/bin/node (often an old apt build) or nothing.
-// Source the common managers explicitly — all output suppressed so it can't
-// pollute the parsed stdout — so the toolchain check, the node-pty
-// probe/build, and the resolved launch path all agree on the user's real node.
-const NODE_MANAGER_PREAMBLE = [
-  'export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"',
-  '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" >/dev/null 2>&1',
-  'command -v nvm >/dev/null 2>&1 && ! command -v node >/dev/null 2>&1 && nvm use default >/dev/null 2>&1',
-  '[ -s "$HOME/.asdf/asdf.sh" ] && . "$HOME/.asdf/asdf.sh" >/dev/null 2>&1',
-  '[ -d "$HOME/.volta/bin" ] && PATH="$HOME/.volta/bin:$PATH"',
-  'for __t3d in "$HOME/.local/share/fnm" "$HOME/.fnm"; do [ -d "$__t3d" ] && PATH="$__t3d:$PATH"; done; unset __t3d',
-  'command -v fnm >/dev/null 2>&1 && eval "$(fnm env 2>/dev/null)" >/dev/null 2>&1',
-  "",
-].join("\n");
+// Reuse the SSH remote resolver so WSL and SSH discover version-managed Node
+// the same way. WSL keeps its separate toolchain version check, so this script
+// is built without an engine range and used only to repair PATH.
+const WSL_NODE_ENV_PREAMBLE = `${buildRemoteNodeEnvScript()}
+ensure_remote_node_path || true
+`;
 
 // wsl.exe re-escapes args before forwarding them to the Linux side, which
 // mangles quotes inside `bash -lc "<script>"`. Pipe the script via stdin to
@@ -113,14 +103,14 @@ const runWslShell = (
   timeout: Duration.Duration,
 ): Effect.Effect<ShellResult, never, ChildProcessSpawner.ChildProcessSpawner> => {
   const spawner = ChildProcessSpawner.ChildProcessSpawner;
-  // -l picks up profile-managed PATH; the NODE_MANAGER_PREAMBLE we prepend to
-  // the script covers nvm/fnm/asdf/volta, which a non-interactive login shell
-  // would otherwise miss. -s so bash reads the script from stdin.
+  // -l picks up profile-managed PATH; the shared resolver covers supported
+  // version managers that non-interactive login shells can miss. -s so bash
+  // reads the script from stdin.
   const command = ChildProcess.make(
     "wsl.exe",
     [...buildDistroArgs(distro), "--", "bash", "-l", "-s"],
     {
-      stdin: Stream.encodeText(Stream.make(`${NODE_MANAGER_PREAMBLE}${bashScript}`)),
+      stdin: Stream.encodeText(Stream.make(`${WSL_NODE_ENV_PREAMBLE}${bashScript}`)),
       stdout: "pipe",
       stderr: "pipe",
       killSignal: "SIGTERM",
@@ -226,10 +216,10 @@ export const parseToolchainReport = (stdout: string): ToolchainReport => {
   return { missingTools, nodeVersion };
 };
 
-// Pulls the absolute node path the WSL distro resolved (after sourcing the
-// version managers) out of a probe/toolchain stdout. Returns null when no
-// node was found, which the caller turns into an actionable "install Node"
-// message instead of a confusing node-pty error.
+// Pulls the absolute node path the WSL distro resolved after the shared remote
+// resolver repaired PATH. Returns null when no node was found, which the caller
+// turns into an actionable "install Node" message instead of a confusing
+// node-pty error.
 export const parseNodePath = (stdout: string): string | null => {
   const path = stdout
     .split("\n")
@@ -306,9 +296,9 @@ const ensureNodePtyImpl = (
     const probe = yield* runWslShell(distro, NODE_PTY_PROBE_SCRIPT(linuxServerDir), PROBE_TIMEOUT);
     const nodePath = parseNodePath(probe.stdout);
 
-    // No node at all, even after sourcing nvm/fnm/asdf/volta. Surface the
-    // specific, actionable toolchain message (which names the version managers)
-    // rather than a confusing node-pty error, and don't try to build.
+    // No node at all, even after the shared resolver repaired PATH. Surface
+    // the specific, actionable toolchain message rather than a confusing
+    // node-pty error, and don't try to build.
     if (nodePath === null) {
       const toolchainCheck = yield* runWslShell(distro, TOOLCHAIN_CHECK_SCRIPT, TOOLCHAIN_TIMEOUT);
       const report = parseToolchainReport(toolchainCheck.stdout);
