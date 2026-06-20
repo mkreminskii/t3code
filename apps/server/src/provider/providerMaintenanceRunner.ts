@@ -14,6 +14,7 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as PlatformError from "effect/PlatformError";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import { HttpClient } from "effect/unstable/http";
@@ -52,20 +53,68 @@ export class ProviderMaintenanceRunner extends Context.Service<
   }
 >()("t3/provider/providerMaintenanceRunner") {}
 
-class ProviderMaintenanceCommandError extends Schema.TaggedErrorClass<ProviderMaintenanceCommandError>()(
-  "ProviderMaintenanceCommandError",
+const platformFailureFields = {
+  failureTag: Schema.NullOr(Schema.String),
+  failureModule: Schema.String,
+  failureMethod: Schema.String,
+  failureDescription: Schema.NullOr(Schema.String),
+  failurePathOrDescriptor: Schema.NullOr(Schema.Union([Schema.String, Schema.Number])),
+} as const;
+
+interface PlatformFailureAttributes {
+  readonly failureTag: string | null;
+  readonly failureModule: string;
+  readonly failureMethod: string;
+  readonly failureDescription: string | null;
+  readonly failurePathOrDescriptor: string | number | null;
+}
+
+function platformFailureAttributes(cause: PlatformError.PlatformError): PlatformFailureAttributes {
+  const { reason } = cause;
+  return {
+    failureTag: reason._tag === "BadArgument" ? null : reason._tag,
+    failureModule: reason.module,
+    failureMethod: reason.method,
+    failureDescription: reason.description || null,
+    failurePathOrDescriptor:
+      "pathOrDescriptor" in reason ? (reason.pathOrDescriptor ?? null) : null,
+  };
+}
+
+function formatPlatformFailure(attributes: PlatformFailureAttributes): string {
+  const tag = attributes.failureTag === null ? "" : `${attributes.failureTag}: `;
+  const path =
+    attributes.failurePathOrDescriptor === null
+      ? ""
+      : ` (${String(attributes.failurePathOrDescriptor)})`;
+  const description =
+    attributes.failureDescription === null ? "" : `: ${attributes.failureDescription}`;
+  return `${tag}${attributes.failureModule}.${attributes.failureMethod}${path}${description}`;
+}
+
+class ProviderMaintenanceCommandSpawnError extends Schema.TaggedErrorClass<ProviderMaintenanceCommandSpawnError>()(
+  "ProviderMaintenanceCommandSpawnError",
   {
-    operation: Schema.Literals(["spawn", "collect"]),
-    command: Schema.optional(Schema.String),
+    command: Schema.String,
+    ...platformFailureFields,
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
-    const causeMessage = this.cause instanceof Error ? this.cause.message : undefined;
-    if (this.operation === "spawn") {
-      return `Failed to run update command ${this.command ?? "unknown"}${causeMessage ? `: ${causeMessage}` : "."}`;
-    }
-    return causeMessage ?? "Update command failed to run.";
+    return `Failed to run update command ${this.command}: ${formatPlatformFailure(this)}`;
+  }
+}
+
+class ProviderMaintenanceCommandCollectError extends Schema.TaggedErrorClass<ProviderMaintenanceCommandCollectError>()(
+  "ProviderMaintenanceCommandCollectError",
+  {
+    command: Schema.String,
+    ...platformFailureFields,
+    cause: Schema.Defect(),
+  },
+) {
+  override get message(): string {
+    return formatPlatformFailure(this);
   }
 }
 
@@ -89,9 +138,9 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
           .pipe(
             Effect.mapError(
               (cause) =>
-                new ProviderMaintenanceCommandError({
-                  operation: "spawn",
+                new ProviderMaintenanceCommandSpawnError({
                   command: input.command,
+                  ...platformFailureAttributes(cause),
                   cause,
                 }),
             ),
@@ -114,8 +163,9 @@ const runProviderMaintenanceCommandWithSpawner = Effect.fn("ProviderMaintenanceR
         ).pipe(
           Effect.mapError(
             (cause) =>
-              new ProviderMaintenanceCommandError({
-                operation: "collect",
+              new ProviderMaintenanceCommandCollectError({
+                command: input.command,
+                ...platformFailureAttributes(cause),
                 cause,
               }),
           ),

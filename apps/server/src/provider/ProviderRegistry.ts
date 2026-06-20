@@ -64,13 +64,18 @@ export class ProviderRegistry extends Context.Service<
   ProviderRegistry,
   {
     /**
-     * Read the latest snapshot for every configured instance. Multiple
-     * snapshots can share a driver kind and are distinguished by instance id.
+     * Read the latest provider snapshots for every configured instance.
+     * Multiple snapshots may share the same driver kind and disambiguate via
+     * `instanceId`.
      */
     readonly getProviders: Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
-     * Refresh every provider, or the default instance for one driver kind.
+     * Refresh all providers, or the default instance of the specified kind
+     * when supplied.
+     *
+     * Retained for compatibility with legacy call sites such as the WS refresh
+     * RPC and orchestration metrics.
      *
      * @deprecated Prefer `refreshInstance` for new call sites.
      */
@@ -80,15 +85,16 @@ export class ProviderRegistry extends Context.Service<
 
     /**
      * Refresh one configured instance. Unknown ids resolve to the current
-     * cached list to preserve the legacy transport behavior.
+     * cached list, matching the legacy `refresh` behavior so transport layers
+     * do not have to special-case unknown ids.
      */
     readonly refreshInstance: (
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
-     * Resolve maintenance capabilities for a live instance, falling back to
-     * manual-only capabilities when that instance is unavailable.
+     * Resolve maintenance capabilities for one live provider instance,
+     * falling back to manual-only capabilities when it is unavailable.
      */
     readonly getProviderMaintenanceCapabilitiesForInstance: (
       instanceId: ProviderInstanceId,
@@ -96,8 +102,10 @@ export class ProviderRegistry extends Context.Service<
     ) => Effect.Effect<ProviderMaintenanceCapabilities>;
 
     /**
-     * Apply volatile maintenance state for one instance. This state is not
-     * persisted; update actions are projected onto `ServerProvider.updateState`.
+     * Apply volatile maintenance-action state to one configured instance. This
+     * state is never persisted. Today only update actions are projected onto
+     * `ServerProvider.updateState`; install/auth actions can extend this map
+     * without adding driver-scoped APIs.
      */
     readonly setProviderMaintenanceActionState: (input: {
       readonly instanceId: ProviderInstanceId;
@@ -105,7 +113,10 @@ export class ProviderRegistry extends Context.Service<
       readonly state: ServerProviderUpdateState | null;
     }) => Effect.Effect<ReadonlyArray<ServerProvider>>;
 
-    /** Emits the full materialized provider list after each aggregated change. */
+    /**
+     * Stream of provider snapshot updates, one emission per aggregated change.
+     * The array contains the full current state.
+     */
     readonly streamChanges: Stream.Stream<ReadonlyArray<ServerProvider>>;
   }
 >()("t3/provider/ProviderRegistry") {}
@@ -670,19 +681,6 @@ export const make = Effect.gen(function* () {
   // these via `upsertProviders` so on-disk state wins where present
   // and pending fallbacks fill the gaps.
   yield* upsertProviders(fallbackProviders, { publish: false });
-  // Subscribe to registry mutations BEFORE running the initial sync.
-  // `subscribeChanges` acquires the dequeue synchronously in this
-  // fibre; the subscription is active the instant this `yield*`
-  // returns. Forking the consumer loop later cannot lose a publish
-  // because no publish can reach a not-yet-subscribed dequeue.
-  //
-  // (Contrast with the pre-fix code that did
-  // `Stream.runForEach(instanceRegistry.streamChanges, …).pipe(Effect.forkScoped)`.
-  // `Stream.fromPubSub` defers `PubSub.subscribe` to stream start,
-  // and `forkScoped` only schedules the fibre — so a reconcile that
-  // published between "fibre scheduled" and "fibre starts running"
-  // was dropped, which made any settings change that replaced an
-  // instance never propagate to the aggregator's `providersRef`.)
   // Subscribe to registry mutations BEFORE running the initial sync.
   // `subscribeChanges` acquires the `PubSub.Subscription` synchronously
   // in this fibre; the subscription is registered with the PubSub the

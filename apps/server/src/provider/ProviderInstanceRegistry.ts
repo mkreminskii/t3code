@@ -58,38 +58,46 @@ export class ProviderInstanceRegistry extends Context.Service<
   ProviderInstanceRegistry,
   {
     /**
-     * Look up one instance by id. Unknown ids return `undefined`; callers map
-     * that absence to the appropriate domain error.
+     * Look up one instance by id. Returns `undefined` (not `Option`) when the
+     * id is unknown; callers branch on absence and emit the appropriate domain
+     * error.
      */
     readonly getInstance: (
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ProviderInstance | undefined>;
 
     /**
-     * Every successfully materialized instance, in stable settings-author
-     * order.
+     * Every available (driver-registered, successfully created) instance, in
+     * stable settings-author order.
      */
     readonly listInstances: Effect.Effect<ReadonlyArray<ProviderInstance>>;
 
     /**
-     * Shadow snapshots for unknown drivers or invalid configurations, ready
-     * to merge into `ProviderRegistry` output.
+     * Wire-shape shadow snapshots for instances whose driver is unknown to this
+     * build or whose config failed to decode. Suitable for merging directly
+     * into `ProviderRegistry` output.
      */
     readonly listUnavailable: Effect.Effect<ReadonlyArray<ServerProvider>>;
 
     /**
-     * Emits after the registry adds, removes, or rebuilds instances. The
-     * payload is `void` because consumers re-read both registry lists.
+     * Push notification stream emitted whenever the registry's contents change.
+     * The payload is `void` because consumers always re-pull `listInstances`
+     * and `listUnavailable` together.
      *
-     * `Stream.fromPubSub` subscribes only when execution begins, so a newly
-     * forked consumer can miss a publish. Consumers that cannot tolerate that
-     * gap should acquire `subscribeChanges` first.
+     * `Stream.fromPubSub` defers `PubSub.subscribe` until the stream starts
+     * running, so forking a consumer races the next publish. Hot-reload
+     * consumers that cannot miss a publish should use `subscribeChanges`
+     * instead, which acquires the subscription synchronously before the
+     * consumer loop is forked.
      */
     readonly streamChanges: Stream.Stream<void>;
 
     /**
-     * Acquire a scoped PubSub subscription synchronously before forking the
-     * consumer loop, ensuring subsequent publishes cannot land in a gap.
+     * Acquire a scoped subscription to the change channel synchronously in the
+     * caller's fiber. Consumers typically `yield*` this in the same fiber that
+     * forks their consumer loop, then drain it with `PubSub.take` or
+     * `Stream.fromSubscription`. Because the subscription is registered before
+     * this effect returns, no subsequent publish can land in a gap.
      */
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
   }
@@ -107,9 +115,14 @@ export class ProviderInstanceRegistryMutator extends Context.Service<
   ProviderInstanceRegistryMutator,
   {
     /**
-     * Reconcile the live registry with a new configuration map. Individual
-     * driver creation failures become unavailable shadow snapshots so the
-     * settings watcher itself never fails.
+     * Bring the live registry in line with the supplied config map. The
+     * operation closes removed or replaced scopes before creating replacements
+     * and publishes a single change tick after the batch. Reapplying an
+     * unchanged map is a no-op.
+     *
+     * The effect never fails: individual driver creation failures become
+     * unavailable shadow snapshots, keeping settings-watcher loops alive when
+     * one entry is invalid.
      */
     readonly reconcile: (configMap: ProviderInstanceConfigMap) => Effect.Effect<void>;
   }

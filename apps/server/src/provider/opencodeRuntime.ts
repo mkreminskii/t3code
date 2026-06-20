@@ -26,7 +26,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
-import * as ProcessRunner from "../processRunner.ts";
+import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { collectStreamAsString } from "./providerSnapshot.ts";
 import * as NetService from "@t3tools/shared/Net";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
@@ -54,12 +54,15 @@ export class OpenCodeRuntimeError extends Schema.TaggedErrorClass<OpenCodeRuntim
     operation: Schema.String,
     detail: Schema.String,
     cause: Schema.optional(Schema.Defect()),
+    exitCode: Schema.optionalKey(Schema.Number),
+    stdout: Schema.optionalKey(Schema.String),
+    stderr: Schema.optionalKey(Schema.String),
   },
 ) {
   static readonly is = Schema.is(OpenCodeRuntimeError);
 
   override get message(): string {
-    return `${this.operation}: ${this.detail}`;
+    return `OpenCode runtime operation ${this.operation} failed.`;
   }
 }
 
@@ -302,7 +305,7 @@ export const make = Effect.gen(function* () {
         { concurrency: "unbounded" },
       );
       const exitCode = Number(code);
-      if (yield* ProcessRunner.isWindowsCommandNotFound(exitCode, stderr)) {
+      if (yield* isWindowsCommandNotFound(exitCode, stderr)) {
         return yield* new OpenCodeRuntimeError({
           operation: "runOpenCodeCommand",
           detail: `spawn ${input.binaryPath} ENOENT`,
@@ -437,7 +440,9 @@ export const make = Effect.gen(function* () {
                 ]
                   .filter(Boolean)
                   .join("\n\n"),
-                cause: { exitCode, stdout, stderr },
+                exitCode,
+                stdout,
+                stderr,
               }),
             ).pipe(Effect.ignore);
           }),

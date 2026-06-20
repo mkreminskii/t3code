@@ -6,6 +6,8 @@
  * unified provider event stream for subscribers.
  *
  * It does not implement provider protocol details (adapter concern).
+ * Uses Effect `Context.Service` for dependency injection and returns typed
+ * domain errors for validation, session, codex, and checkpoint workflows.
  *
  * @module ProviderService
  */
@@ -61,14 +63,22 @@ import * as ProviderSessionDirectory from "./ProviderSessionDirectory.ts";
 import { type EventNdjsonLogger } from "./Layers/EventNdjsonLogger.ts";
 import * as ProviderEventLoggers from "./ProviderEventLoggers.ts";
 import * as AnalyticsService from "../telemetry/AnalyticsService.ts";
-import * as McpProviderSession from "../mcp/McpProviderSession.ts";
-import * as McpSessionRegistry from "../mcp/McpSessionRegistry.ts";
+import {
+  clearAllMcpProviderSessions,
+  clearMcpProviderSession,
+  setMcpProviderSession,
+} from "../mcp/McpProviderSession.ts";
+import {
+  issueActiveMcpCredential,
+  revokeActiveMcpThread,
+  revokeAllActiveMcpCredentials,
+} from "../mcp/McpSessionRegistry.ts";
 const isModelSelection = Schema.is(ModelSelection);
 
 export class ProviderService extends Context.Service<
   ProviderService,
   {
-    /** Start a provider session for a thread. */
+    /** Start a provider session. */
     readonly startSession: (
       threadId: ThreadId,
       input: ProviderSessionStartInput,
@@ -99,10 +109,14 @@ export class ProviderService extends Context.Service<
       input: ProviderStopSessionInput,
     ) => Effect.Effect<void, ProviderServiceError>;
 
-    /** Aggregate the active sessions reported by all registered adapters. */
+    /**
+     * List active provider sessions.
+     *
+     * Aggregates runtime session lists from all registered adapters.
+     */
     readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
 
-    /** Read capabilities for the adapter bound to an instance. */
+    /** Read capabilities for the adapter bound to a configured provider instance. */
     readonly getCapabilities: (
       instanceId: ProviderInstanceId,
     ) => Effect.Effect<ProviderAdapterCapabilities, ProviderServiceError>;
@@ -119,8 +133,9 @@ export class ProviderService extends Context.Service<
     }) => Effect.Effect<void, ProviderServiceError>;
 
     /**
-     * Canonical provider runtime event stream. ProviderService owns the
-     * per-instance fan-out rather than delegating it to a separate event bus.
+     * Canonical provider runtime event stream.
+     *
+     * Fan-out is owned by ProviderService (not by a standalone event-bus service).
      */
     readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
   }
@@ -279,16 +294,14 @@ export const make = Effect.fn("ProviderService.make")(function* (options?: Provi
   const runtimeEventPubSub = yield* PubSub.unbounded<ProviderRuntimeEvent>();
   const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
   const prepareMcpSession = (threadId: ThreadId, providerInstanceId: ProviderInstanceId) =>
-    McpSessionRegistry.issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
+    issueActiveMcpCredential({ threadId, providerInstanceId }).pipe(
       Effect.tap((credential) =>
-        credential
-          ? Effect.sync(() => McpProviderSession.setMcpProviderSession(credential.config))
-          : Effect.void,
+        credential ? Effect.sync(() => setMcpProviderSession(credential.config)) : Effect.void,
       ),
     );
   const clearMcpSession = (threadId: ThreadId) =>
-    McpSessionRegistry.revokeActiveMcpThread(threadId).pipe(
-      Effect.tap(() => Effect.sync(() => McpProviderSession.clearMcpProviderSession(threadId))),
+    revokeActiveMcpThread(threadId).pipe(
+      Effect.tap(() => Effect.sync(() => clearMcpProviderSession(threadId))),
     );
 
   const publishRuntimeEvent = (event: ProviderRuntimeEvent): Effect.Effect<void> =>
@@ -1096,8 +1109,8 @@ export const make = Effect.fn("ProviderService.make")(function* (options?: Provi
       ),
     ).pipe(Effect.asVoid);
     yield* Effect.forEach(currentAdapters, ([, adapter]) => adapter.stopAll()).pipe(Effect.asVoid);
-    yield* McpSessionRegistry.revokeAllActiveMcpCredentials();
-    McpProviderSession.clearAllMcpProviderSessions();
+    yield* revokeAllActiveMcpCredentials();
+    clearAllMcpProviderSessions();
     const bindings = yield* directory.listBindings().pipe(Effect.orElseSucceed(() => []));
     yield* Effect.forEach(bindings, (binding) =>
       Effect.gen(function* () {

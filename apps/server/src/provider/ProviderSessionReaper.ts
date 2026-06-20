@@ -14,6 +14,7 @@ import * as ProviderSessionDirectory from "./ProviderSessionDirectory.ts";
 export class ProviderSessionReaper extends Context.Service<
   ProviderSessionReaper,
   {
+    /** Start the background provider session reaper within the provided scope. */
     readonly start: () => Effect.Effect<void, never, Scope.Scope>;
   }
 >()("t3/provider/ProviderSessionReaper") {}

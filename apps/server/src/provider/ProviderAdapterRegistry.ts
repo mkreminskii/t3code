@@ -12,10 +12,15 @@
  *   - `getByInstance` / `listInstances` — new per-instance routing. Callers
  *     that already know an `instanceId` (threads, sessions, events)
  *     should prefer these.
+ *   - `listProviders` — legacy kind-keyed routing for default instances
  *     (`defaultInstanceIdForDriver(kind) === kind`), matching the pre-Slice-D
  *     behaviour. New code should not grow additional callers of the kind-keyed
  *     methods; they exist so the settings UI, WS refresh RPC, and a handful
  *     of legacy persisted rows can still be routed during the rollout.
+ *
+ * Adapter lookups are resolved dynamically through `ProviderInstanceRegistry`.
+ * Settings-driven hot reload is therefore visible immediately without
+ * rebuilding this facade.
  *
  * @module ProviderAdapterRegistry
  */
@@ -50,7 +55,10 @@ export class ProviderAdapterRegistry extends Context.Service<
   {
     /**
      * Resolve the adapter for a specific instance id. Returns
-     * `ProviderUnsupportedError` if no such live instance is registered.
+     * `ProviderUnsupportedError` if no such instance is currently registered
+     * (which covers "never configured" and "configured but the driver is
+     * unavailable in this build"; both surface the same failure to callers
+     * that expect a working adapter).
      */
     readonly getByInstance: (
       instanceId: ProviderInstanceId,
@@ -62,28 +70,33 @@ export class ProviderAdapterRegistry extends Context.Service<
     ) => Effect.Effect<ProviderInstanceRoutingInfo, ProviderUnsupportedError>;
 
     /**
-     * List every live instance id. Unavailable shadow instances are excluded
-     * because callers use these ids with `getByInstance`.
+     * List all live instance ids. Excludes unavailable/shadow instances because
+     * callers of this method want something they can pass to `getByInstance`.
      */
     readonly listInstances: () => Effect.Effect<ReadonlyArray<ProviderInstanceId>>;
 
     /**
      * List provider kinds whose default instance is currently registered.
      *
-     * @deprecated Prefer `listInstances`; this remains for migration-era
-     * callers that still address providers by driver kind.
+     * @deprecated Prefer `listInstances`. Retained for migration-era call sites
+     * that iterate providers to build UI or metrics.
      */
     readonly listProviders: () => Effect.Effect<ReadonlyArray<ProviderDriverKind>>;
 
     /**
-     * Emits whenever the live instance set changes. Consumers should re-read
-     * `listInstances` and reconcile their per-instance subscriptions.
+     * Change notification stream mirroring
+     * `ProviderInstanceRegistry.streamChanges`. Emits one `void` tick whenever
+     * the set of live instances changes. Consumers that fan out
+     * `adapter.streamEvents` per instance re-pull `listInstances` on each tick
+     * and fork subscriptions for instances they have not seen yet.
      */
     readonly streamChanges: Stream.Stream<void>;
 
     /**
-     * Acquire the change subscription synchronously in the caller's scope,
-     * avoiding the publish race inherent in forking `Stream.fromPubSub`.
+     * Acquire a change subscription synchronously in the caller's current
+     * fiber. Consumers that must avoid missing a publish between initial
+     * reconciliation and watcher startup should use this, then fork
+     * `Stream.fromSubscription`.
      */
     readonly subscribeChanges: Effect.Effect<PubSub.Subscription<void>, never, Scope.Scope>;
   }
@@ -130,6 +143,8 @@ export const make = Effect.gen(function* () {
         const kinds = new Set<ProviderDriverKind>();
         for (const instance of instances) {
           if (instance.instanceId === defaultInstanceIdForDriver(instance.driverKind)) {
+            // Only default instances appear through this legacy view; custom
+            // instances such as `codex_personal` have no driver-kind identity.
             kinds.add(instance.driverKind);
           }
         }
@@ -142,6 +157,8 @@ export const make = Effect.gen(function* () {
     getInstanceInfo,
     listInstances,
     listProviders,
+    // The facade owns no state; the instance registry already coalesces
+    // add, remove, and rebuild notifications into a single change channel.
     streamChanges: registry.streamChanges,
     subscribeChanges: registry.subscribeChanges,
   });

@@ -20,9 +20,7 @@ import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.t
 import * as ProviderSessionDirectory from "./ProviderSessionDirectory.ts";
 
 function makeDirectoryLayer<E, R>(persistenceLayer: Layer.Layer<SqlClient.SqlClient, E, R>) {
-  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
-    Layer.provide(persistenceLayer),
-  );
+  const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(Layer.provide(persistenceLayer));
   return Layer.mergeAll(
     runtimeRepositoryLayer,
     ProviderSessionDirectory.layer.pipe(Layer.provide(runtimeRepositoryLayer)),

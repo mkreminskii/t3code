@@ -70,9 +70,7 @@ const makeIntegrationFixture = Effect.gen(function* () {
     ),
   ).pipe(Layer.provide(SqlitePersistenceMemory));
 
-  const layer = Layer.effect(ProviderService.ProviderService, ProviderService.make()).pipe(
-    Layer.provide(shared),
-  );
+  const layer = ProviderService.layer.pipe(Layer.provide(shared));
 
   return {
     cwd,

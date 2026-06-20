@@ -14,7 +14,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import { ProviderSessionDirectoryPersistenceError, ProviderValidationError } from "./Errors.ts";
-import * as ProviderSessionRuntime from "../persistence/Services/ProviderSessionRuntime.ts";
+import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 
 export interface ProviderRuntimeBinding {
   readonly threadId: ThreadId;
@@ -119,6 +119,9 @@ function toRuntimeBinding(
         ({
           threadId: runtime.threadId,
           provider,
+          // Migration boundary: rows written before provider instances had a
+          // nullable id. Promote them here so runtime routing never has to
+          // infer an instance from its driver kind.
           providerInstanceId: runtime.providerInstanceId ?? defaultInstanceIdForDriver(provider),
           adapterKey: runtime.adapterKey,
           runtimeMode: runtime.runtimeMode,
