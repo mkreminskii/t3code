@@ -585,14 +585,15 @@ export const makeCloudflaredRelayClient = Effect.fn("cloudflared.make")(function
     );
     yield* report("waiting_for_lock");
     yield* acquireInstallLock(lockPath).pipe(
-      Effect.catchTag("PlatformError", (cause) =>
-        Effect.fail(
-          new RelayClientInstallLockAcquireError({
-            lockPath,
-            cause,
-          }),
-        ),
-      ),
+      Effect.catchTags({
+        PlatformError: (cause) =>
+          Effect.fail(
+            new RelayClientInstallLockAcquireError({
+              lockPath,
+              cause,
+            }),
+          ),
+      }),
     );
     return yield* Effect.gen(function* () {
       const afterLock = yield* resolve;
