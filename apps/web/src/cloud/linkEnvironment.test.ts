@@ -2,12 +2,14 @@ import {
   type DesktopBridge,
   EnvironmentId,
   type RelayClientInstallProgressEvent,
+  type RelayClientStatus,
   WS_METHODS,
 } from "@t3tools/contracts";
 import { RelayWebClientId } from "@t3tools/contracts/relay";
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
@@ -26,7 +28,9 @@ import { remoteHttpClientLayer } from "@t3tools/client-runtime/rpc";
 import { __resetDesktopPrimaryAuthForTests } from "../environments/primary/desktopAuth";
 
 import {
+  CloudEnvironmentLinkOperationError,
   collectCloudLinkTargets,
+  isCloudEnvironmentLinkError,
   linkPrimaryEnvironmentToCloud,
   listManagedCloudEnvironments,
   normalizeRelayBaseUrl,
@@ -48,10 +52,19 @@ const relayClientInstallDialog = vi.hoisted(() => ({
   finish: vi.fn(),
 }));
 
+const cloudPublicConfig = vi.hoisted(() => ({
+  relayUrl: "https://relay.example.test",
+}));
+
 vi.mock("./relayClientInstallDialog", () => ({
   requestRelayClientInstallConfirmation: relayClientInstallDialog.requestConfirmation,
   reportRelayClientInstallProgress: relayClientInstallDialog.reportProgress,
   finishRelayClientInstall: relayClientInstallDialog.finish,
+}));
+
+vi.mock("./publicConfig", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./publicConfig")>()),
+  resolveCloudPublicConfig: () => ({ relayUrl: cloudPublicConfig.relayUrl }),
 }));
 
 const createProof = vi.fn(() => Effect.succeed("dpop-proof"));
@@ -75,7 +88,7 @@ function relayLayer() {
 }
 
 function registryLayer(options?: {
-  readonly status?: { readonly status: "available"; readonly version: string };
+  readonly status?: RelayClientStatus;
   readonly installEvents?: ReadonlyArray<RelayClientInstallProgressEvent>;
 }) {
   return Layer.effect(
@@ -83,7 +96,14 @@ function registryLayer(options?: {
     Effect.gen(function* () {
       const client = {
         [WS_METHODS.cloudGetRelayClientStatus]: () =>
-          Effect.succeed(options?.status ?? { status: "available", version: "2026.6.0" }),
+          Effect.succeed(
+            options?.status ?? {
+              status: "available",
+              executablePath: "/managed/cloudflared",
+              source: "managed",
+              version: "2026.6.0",
+            },
+          ),
         [WS_METHODS.cloudInstallRelayClient]: () =>
           Stream.fromIterable(options?.installEvents ?? []),
       } as unknown as RpcSession["client"];
@@ -141,6 +161,7 @@ function bodyText(body: BodyInit | null | undefined): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cloudPublicConfig.relayUrl = "https://relay.example.test";
   vi.stubEnv("VITE_T3CODE_RELAY_URL", "https://relay.example.test");
   relayClientInstallDialog.requestConfirmation.mockResolvedValue(true);
 });
@@ -195,6 +216,47 @@ describe("web cloud link environment client", () => {
     }),
   );
 
+  it.effect("preserves structured relay failures and trace IDs", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json(
+            {
+              _tag: "RelayAuthInvalidError",
+              code: "auth_invalid",
+              reason: "invalid_bearer",
+              traceId: "trace-web-cloud-link",
+            },
+            { status: 401 },
+          ),
+        ),
+      );
+
+      const error = yield* withServices(
+        listManagedCloudEnvironments({ clerkToken: "clerk-token" }),
+      ).pipe(Effect.flip);
+
+      expect(error).toBeInstanceOf(CloudEnvironmentLinkOperationError);
+      expect(error).toMatchObject({
+        action: "list relay-managed environments",
+        relayUrlInputLength: "https://relay.example.test".length,
+        relayUrlProtocol: "https:",
+        relayUrlHostname: "relay.example.test",
+        traceId: "trace-web-cloud-link",
+        relayError: {
+          _tag: "RelayAuthInvalidError",
+          reason: "invalid_bearer",
+        },
+        cause: {
+          _tag: "ManagedRelayRequestFailedError",
+        },
+      });
+      expect(error.message).toBe("Could not list relay-managed environments.");
+      expect(isCloudEnvironmentLinkError(error)).toBe(true);
+    }),
+  );
+
   it.effect("reads primary cloud link state from the explicit target", () =>
     Effect.gen(function* () {
       const fetchMock = vi.fn().mockResolvedValue(
@@ -224,6 +286,96 @@ describe("web cloud link environment client", () => {
       );
     }),
   );
+
+  it.effect("preserves structured environment API failures and their cause chain", () =>
+    Effect.gen(function* () {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockResolvedValue(
+          Response.json(
+            {
+              _tag: "EnvironmentHttpUnauthorizedError",
+              message: "Environment bearer token is invalid.",
+            },
+            { status: 401 },
+          ),
+        ),
+      );
+
+      const error = yield* withServices(readPrimaryCloudLinkState({ target: TARGET })).pipe(
+        Effect.flip,
+      );
+
+      expect(error).toBeInstanceOf(CloudEnvironmentLinkOperationError);
+      expect(error).toMatchObject({
+        action: "read environment cloud link state",
+        environmentId: TARGET.environmentId,
+        httpBaseUrlInputLength: TARGET.httpBaseUrl.length,
+        httpBaseUrlProtocol: "http:",
+        httpBaseUrlHostname: "127.0.0.1",
+        environmentError: {
+          _tag: "EnvironmentHttpUnauthorizedError",
+          message: "Environment bearer token is invalid.",
+        },
+      });
+      expect(error.cause).toBeDefined();
+      expect(error.message).toBe(
+        `Could not read environment cloud link state for environment "${TARGET.environmentId}".`,
+      );
+      expect(isCloudEnvironmentLinkError(error)).toBe(true);
+    }),
+  );
+
+  it.effect("preserves invalid environment HTTP URL parser causes", () =>
+    Effect.gen(function* () {
+      const invalidUrl =
+        "https://user:password@[invalid-host]/private/path?access_token=secret#fragment";
+      const error = yield* withServices(
+        readPrimaryCloudLinkState({
+          target: {
+            ...TARGET,
+            httpBaseUrl: invalidUrl,
+          },
+        }),
+      ).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "CloudEnvironmentLinkOperationError",
+        action: "initialize the environment HTTP client",
+        environmentId: TARGET.environmentId,
+        httpBaseUrlInputLength: invalidUrl.length,
+      });
+      expect(error.cause).toBeInstanceOf(TypeError);
+      expect(error).not.toHaveProperty("httpBaseUrl");
+      expect(error).not.toHaveProperty("httpBaseUrlProtocol");
+      expect(error).not.toHaveProperty("httpBaseUrlHostname");
+      expect(error.message).not.toMatch(/user|password|private|path|access_token|secret|fragment/);
+    }),
+  );
+
+  it("keeps environment endpoint secrets out of mapped error attributes", () => {
+    const httpBaseUrl =
+      "https://user:password@environment.example.test/private/path?access_token=secret#fragment";
+    const cause = new Error("request failed");
+    const error = CloudEnvironmentLinkOperationError.fromEnvironmentApi({
+      action: "read environment cloud link state",
+      environmentId: TARGET.environmentId,
+      httpBaseUrl,
+      cause,
+    });
+
+    expect(error).toMatchObject({
+      httpBaseUrlInputLength: httpBaseUrl.length,
+      httpBaseUrlProtocol: "https:",
+      httpBaseUrlHostname: "environment.example.test",
+      cause,
+    });
+    expect(error.cause).toBe(cause);
+    expect(error).not.toHaveProperty("httpBaseUrl");
+    const diagnostics = JSON.stringify(error);
+    expect(diagnostics).not.toMatch(/user|password|private|path|access_token|secret|fragment/);
+    expect(error.message).not.toMatch(/user|password|private|path|access_token|secret|fragment/);
+  });
 
   it.effect("uses desktop bearer auth for primary cloud link state", () =>
     Effect.gen(function* () {
@@ -306,6 +458,37 @@ describe("web cloud link environment client", () => {
     }),
   );
 
+  it.effect("validates the environment endpoint before prompting to install a relay client", () =>
+    Effect.gen(function* () {
+      const invalidUrl =
+        "https://user:password@[invalid-host]/private/path?access_token=secret#fragment";
+
+      const error = yield* withServices(
+        linkPrimaryEnvironmentToCloud({
+          target: {
+            ...TARGET,
+            httpBaseUrl: invalidUrl,
+          },
+          clerkToken: "clerk-token",
+        }),
+        {
+          status: { status: "missing", version: "2026.6.0" },
+        },
+      ).pipe(Effect.flip);
+
+      expect(error).toMatchObject({
+        _tag: "CloudEnvironmentLinkOperationError",
+        action: "derive the environment endpoint origin",
+        environmentId: TARGET.environmentId,
+        httpBaseUrlInputLength: invalidUrl.length,
+      });
+      expect(error.cause).toBeInstanceOf(TypeError);
+      expect(error).not.toHaveProperty("httpBaseUrl");
+      expect(error.message).not.toMatch(/user|password|private|path|access_token|secret|fragment/);
+      expect(relayClientInstallDialog.requestConfirmation).not.toHaveBeenCalled();
+    }),
+  );
+
   it.effect("installs a missing relay client before linking", () =>
     Effect.gen(function* () {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ malformed: true })));
@@ -316,7 +499,12 @@ describe("web cloud link environment client", () => {
           clerkToken: "clerk-token",
         }),
         {
-          status: { status: "available", version: "2026.6.0" },
+          status: {
+            status: "available",
+            executablePath: "/managed/cloudflared",
+            source: "managed",
+            version: "2026.6.0",
+          },
           installEvents: [],
         },
       ).pipe(Effect.flip);
@@ -348,4 +536,64 @@ describe("web cloud link environment client", () => {
       );
     }),
   );
+
+  it.effect("keeps configured relay URL secrets out of revoke warnings", () => {
+    const relayUrl =
+      "https://relay-user:relay-password@relay.example.test/private/workspace?access_token=relay-secret#relay-fragment";
+    cloudPublicConfig.relayUrl = relayUrl;
+    const capturedLogs: Array<ReadonlyArray<unknown>> = [];
+    const logger = Logger.make(({ message }) => {
+      capturedLogs.push(Array.isArray(message) ? message : [message]);
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({ ok: true, endpointRuntimeStatus: { status: "disabled" } }),
+      )
+      .mockResolvedValueOnce(Response.json({ malformed: true }, { status: 500 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    return unlinkPrimaryEnvironmentFromCloud({
+      target: TARGET,
+      clerkToken: "clerk-token",
+    }).pipe(
+      Effect.provide(
+        Layer.merge(
+          services(),
+          Logger.layer([logger], {
+            mergeWithExisting: false,
+          }),
+        ),
+      ),
+      Effect.tap(() =>
+        Effect.sync(() => {
+          expect(capturedLogs).toHaveLength(1);
+          const logFields = capturedLogs[0]?.find(
+            (value): value is Record<string, unknown> =>
+              typeof value === "object" && value !== null,
+          );
+          expect(logFields).toMatchObject({
+            relayUrlInputLength: relayUrl.length,
+            relayUrlProtocol: "https:",
+            relayUrlHostname: "relay.example.test",
+            causeTag: "ManagedRelayRequestFailedError",
+          });
+          expect(logFields).not.toHaveProperty("relayUrl");
+          expect(logFields).not.toHaveProperty("cause");
+          const logText = capturedLogs[0]
+            ?.filter((value): value is string => typeof value === "string")
+            .join(" ");
+          for (const secret of [
+            "relay-user",
+            "relay-password",
+            "/private/workspace",
+            "access_token=relay-secret",
+            "relay-fragment",
+          ]) {
+            expect(logText).not.toContain(secret);
+          }
+        }),
+      ),
+    );
+  });
 });
