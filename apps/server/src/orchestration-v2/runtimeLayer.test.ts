@@ -24,6 +24,7 @@ import { OrchestratorV2 } from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { OrchestrationV2LayerLive } from "./runtimeLayer.ts";
 import { shellStreamItemFromSnapshot } from "./ShellStream.ts";
+import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-runtime-layer-",
@@ -48,7 +49,7 @@ const driver = ProviderDriverKind.make("codex");
 const orchestrationAdapter = {
   instanceId: modelSelection.instanceId,
   driver,
-  getCapabilities: () => Effect.die("capabilities are not used by lifecycle tests"),
+  getCapabilities: () => Effect.succeed(CodexProviderCapabilitiesV2),
   openSession: () => Effect.die("sessions are not used by lifecycle tests"),
 } as ProviderAdapterV2Shape;
 const providerInstance = {
