@@ -115,18 +115,20 @@ export class BackendTimeoutError extends Data.TaggedError("BackendTimeoutError")
 class BackendProcessBootstrapEncodeError extends Data.TaggedError(
   "BackendProcessBootstrapEncodeError",
 )<{
+  readonly entryPath: string;
   readonly cause: Schema.SchemaError;
 }> {
   override get message() {
-    return `Failed to encode desktop backend bootstrap payload: ${this.cause.message}`;
+    return `Failed to encode the desktop backend bootstrap payload for ${this.entryPath}.`;
   }
 }
 
 class BackendProcessSpawnError extends Data.TaggedError("BackendProcessSpawnError")<{
+  readonly executablePath: string;
   readonly cause: PlatformError.PlatformError;
 }> {
   override get message() {
-    return `Failed to spawn desktop backend process: ${this.cause.message}`;
+    return `Failed to spawn the desktop backend process at ${this.executablePath}.`;
   }
 }
 
@@ -320,7 +322,9 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
 ): Effect.fn.Return<BackendProcessExit, BackendProcessError, BackendProcessRunRequirements> {
   const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
   const bootstrapJson = yield* encodeBootstrapJson(options.bootstrap).pipe(
-    Effect.mapError((cause) => new BackendProcessBootstrapEncodeError({ cause })),
+    Effect.mapError(
+      (cause) => new BackendProcessBootstrapEncodeError({ entryPath: options.entryPath, cause }),
+    ),
   );
   const onOutput = options.onOutput ?? (() => Effect.void);
   const bootstrapStream = Stream.encodeText(Stream.make(`${bootstrapJson}\n`));
@@ -345,7 +349,11 @@ const runBackendProcess = Effect.fn("runBackendProcess")(function* (
 
   const handle = yield* spawner
     .spawn(command)
-    .pipe(Effect.mapError((cause) => new BackendProcessSpawnError({ cause })));
+    .pipe(
+      Effect.mapError(
+        (cause) => new BackendProcessSpawnError({ executablePath: options.executablePath, cause }),
+      ),
+    );
 
   yield* options.onStarted?.(handle.pid) ?? Effect.void;
   if (options.captureOutput) {
