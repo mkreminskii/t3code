@@ -47,6 +47,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from "react";
 
 import {
@@ -886,28 +887,19 @@ interface ComposerPromptEditorProps {
     cursorAdjacentToMention: boolean,
     terminalContextIds: string[],
   ) => void;
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => boolean;
+  onCommandKeyDown?: ComposerCommandKeyDownHandler;
   onPaste: React.ClipboardEventHandler<HTMLElement>;
   editorRef: React.RefObject<ComposerPromptEditorHandle | null>;
 }
 
-function ComposerCommandKeyPlugin(props: {
-  onCommandKeyDown?: (
-    key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-    event: KeyboardEvent,
-  ) => boolean;
-}) {
-  const [editor] = useLexicalComposerContext();
+type ComposerCommandKey = "ArrowDown" | "ArrowUp" | "Enter" | "Tab";
+type ComposerCommandKeyDownHandler = (key: ComposerCommandKey, event: KeyboardEvent) => boolean;
 
-  useEffect(() => {
-    const handleCommand = (
-      key: "ArrowDown" | "ArrowUp" | "Enter" | "Tab",
-      event: KeyboardEvent | null,
-    ): boolean => {
-      if (!props.onCommandKeyDown || !event) {
+function useComposerCommandKeyCommands(onCommandKeyDown?: ComposerCommandKeyDownHandler) {
+  const [editor] = useLexicalComposerContext();
+  const handleCommandKeyDown = useEffectEvent(
+    (key: ComposerCommandKey, event: KeyboardEvent | null): boolean => {
+      if (!onCommandKeyDown || !event) {
         return false;
       }
 
@@ -916,32 +908,34 @@ function ComposerCommandKeyPlugin(props: {
         return true;
       }
 
-      const handled = props.onCommandKeyDown(key, event);
+      const handled = onCommandKeyDown(key, event);
       if (handled) {
         event.preventDefault();
         event.stopPropagation();
       }
       return handled;
-    };
+    },
+  );
 
+  useEffect(() => {
     const unregisterArrowDown = editor.registerCommand(
       KEY_ARROW_DOWN_COMMAND,
-      (event) => handleCommand("ArrowDown", event),
+      (event) => handleCommandKeyDown("ArrowDown", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterArrowUp = editor.registerCommand(
       KEY_ARROW_UP_COMMAND,
-      (event) => handleCommand("ArrowUp", event),
+      (event) => handleCommandKeyDown("ArrowUp", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterEnter = editor.registerCommand(
       KEY_ENTER_COMMAND,
-      (event) => handleCommand("Enter", event),
+      (event) => handleCommandKeyDown("Enter", event),
       COMMAND_PRIORITY_HIGH,
     );
     const unregisterTab = editor.registerCommand(
       KEY_TAB_COMMAND,
-      (event) => handleCommand("Tab", event),
+      (event) => handleCommandKeyDown("Tab", event),
       COMMAND_PRIORITY_HIGH,
     );
 
@@ -951,9 +945,7 @@ function ComposerCommandKeyPlugin(props: {
       unregisterEnter();
       unregisterTab();
     };
-  }, [editor, props]);
-
-  return null;
+  }, [editor]);
 }
 
 function ComposerInlineTokenArrowPlugin() {
@@ -1123,7 +1115,8 @@ function ComposerSurroundSelectionPlugin(props: {
 }) {
   const [editor] = useLexicalComposerContext();
   const terminalContextsRef = useRef(props.terminalContexts);
-  const skillMetadataRef = useRef(skillMetadataByName(props.skills));
+  const [initialSkillMetadata] = useState(() => skillMetadataByName(props.skills));
+  const skillMetadataRef = useRef(initialSkillMetadata);
   const pendingSurroundSelectionRef = useRef<{
     value: string;
     expandedStart: number;
@@ -1404,7 +1397,8 @@ function ComposerPromptEditorInner({
   const terminalContextsSignatureRef = useRef(terminalContextsSignature);
   const skillsSignature = skillSignature(skills);
   const skillsSignatureRef = useRef(skillsSignature);
-  const skillMetadataRef = useRef(skillMetadataByName(skills));
+  const [initialSkillMetadata] = useState(() => skillMetadataByName(skills));
+  const skillMetadataRef = useRef(initialSkillMetadata);
   const snapshotRef = useRef({
     value,
     cursor: initialCursor,
@@ -1428,6 +1422,8 @@ function ComposerPromptEditorInner({
   useEffect(() => {
     editor.setEditable(!disabled);
   }, [disabled, editor]);
+
+  useComposerCommandKeyCommands(onCommandKeyDown);
 
   useLayoutEffect(() => {
     const normalizedCursor = clampCollapsedComposerCursor(value, cursor);
@@ -1629,7 +1625,6 @@ function ComposerPromptEditorInner({
           ErrorBoundary={LexicalErrorBoundary}
         />
         <OnChangePlugin onChange={handleEditorChange} />
-        <ComposerCommandKeyPlugin {...(onCommandKeyDown ? { onCommandKeyDown } : {})} />
         <ComposerSurroundSelectionPlugin terminalContexts={terminalContexts} skills={skills} />
         <ComposerInlineTokenArrowPlugin />
         <ComposerInlineTokenSelectionNormalizePlugin />
@@ -1656,7 +1651,8 @@ export function ComposerPromptEditor({
 }: ComposerPromptEditorProps) {
   const initialValueRef = useRef(value);
   const initialTerminalContextsRef = useRef(terminalContexts);
-  const initialSkillMetadataRef = useRef(skillMetadataByName(skills));
+  const [initialSkillMetadata] = useState(() => skillMetadataByName(skills));
+  const initialSkillMetadataRef = useRef(initialSkillMetadata);
   const initialConfig = useMemo<InitialConfigType>(
     () => ({
       namespace: "t3tools-composer-editor",
