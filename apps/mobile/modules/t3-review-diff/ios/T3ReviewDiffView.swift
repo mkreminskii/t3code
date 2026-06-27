@@ -492,6 +492,8 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
   }
 
   func setTokensPatchJson(_ tokensPatchJson: String) {
+    let generation = tokensDecodeGeneration
+
     payloadDecodeQueue.async { [weak self] in
       guard let data = tokensPatchJson.data(using: .utf8) else {
         return
@@ -500,7 +502,7 @@ public final class T3ReviewDiffView: ExpoView, UIScrollViewDelegate {
       do {
         let patch = try JSONDecoder().decode(ReviewDiffNativeTokenPatch.self, from: data)
         DispatchQueue.main.async { [weak self] in
-          guard let self else {
+          guard let self, generation == self.tokensDecodeGeneration else {
             return
           }
           // A highlighter request from the previous file can finish after the view has
