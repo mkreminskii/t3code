@@ -194,23 +194,13 @@ function normalizeScreenOptions(
     return options;
   }
 
-  const normalized = { ...options } as NativeStackNavigationOptions & {
-    unstable_navigationItemStyle?: unknown;
-    unstable_headerCenterItems?: unknown;
-    unstable_headerSubtitle?: unknown;
-    unstable_headerToolbarItems?: unknown;
-  };
-
-  delete normalized.unstable_navigationItemStyle;
-  delete normalized.unstable_headerCenterItems;
-  delete normalized.unstable_headerSubtitle;
-  delete normalized.unstable_headerToolbarItems;
+  const normalized = { ...options };
 
   if (normalized.headerTintColor !== undefined) {
-    normalized.headerTintColor = String(normalized.headerTintColor);
+    (normalized as Record<string, unknown>).headerTintColor = String(normalized.headerTintColor);
   }
 
-  return normalized as NativeStackNavigationOptions;
+  return normalized as unknown as NativeStackNavigationOptions;
 }
 
 function StackScreen(props: {

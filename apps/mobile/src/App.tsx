@@ -45,6 +45,7 @@ import AddProjectRepositoryRoute from "./screens/new/add-project/repository";
 import AddProjectDestinationRoute from "./screens/new/add-project/destination";
 import AddProjectLocalRoute from "./screens/new/add-project/local";
 import NewTaskDraftRoute from "./screens/new/draft";
+import { NewTaskFlowProvider } from "./features/threads/new-task-flow-provider";
 import RnsGlassDebugRoute from "./screens/debug/rns-glass";
 import NotFoundRoute from "./screens/+not-found";
 import { ThreadFilesTreeScreen, ThreadFileScreen } from "./features/files/ThreadFilesRouteScreen";
@@ -191,6 +192,14 @@ function GitConfirmRoute() {
     <ThreadSelectionRoute>
       <GitConfirmSheet />
     </ThreadSelectionRoute>
+  );
+}
+
+function NewTaskDraftWithProvider() {
+  return (
+    <NewTaskFlowProvider>
+      <NewTaskDraftRoute />
+    </NewTaskFlowProvider>
   );
 }
 
@@ -421,7 +430,7 @@ function WorkspaceNavigator() {
       />
       <RootStack.Screen
         name="NewTaskDraft"
-        component={NewTaskDraftRoute}
+        component={NewTaskDraftWithProvider}
         options={newTaskScreenOptions}
       />
       <RootStack.Screen
