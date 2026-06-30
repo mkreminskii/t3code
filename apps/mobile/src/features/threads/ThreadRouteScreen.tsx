@@ -119,7 +119,7 @@ function ThreadUnavailableScreen() {
 export function ThreadRouteScreen(props: ThreadRouteScreenProps = {}) {
   const { state: workspaceState } = useWorkspaceState();
   const { connectionState } = useRemoteConnectionStatus();
-  const { selectedThread } = useThreadSelection();
+  const { selectedThread, selectedThreadDetailLoading } = useThreadSelection();
   const params = useLocalSearchParams<{
     environmentId?: string | string[];
     threadId?: string | string[];
@@ -158,7 +158,8 @@ export function ThreadRouteScreen(props: ThreadRouteScreenProps = {}) {
   const stillHydrating =
     workspaceState.isLoadingConnections ||
     routeConnectionState === "connecting" ||
-    routeConnectionState === "reconnecting";
+    routeConnectionState === "reconnecting" ||
+    selectedThreadDetailLoading;
 
   if (stillHydrating) {
     return <OpeningThreadLoadingScreen />;

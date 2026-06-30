@@ -98,6 +98,11 @@ function useResolvedThreadSelection() {
         : null),
     [selectedThreadDetail, selectedThreadRef, selectedThreadShell],
   );
+  const selectedThreadDetailLoading =
+    selectedThreadRef !== null &&
+    selectedThread === null &&
+    selectedThreadDetailState.status !== "deleted" &&
+    Option.isNone(selectedThreadDetailState.error);
   const selectedProjectRef = useMemo<ScopedProjectRef | null>(
     () =>
       selectedThread === null
@@ -117,6 +122,7 @@ function useResolvedThreadSelection() {
     () => ({
       selectedThreadRef,
       selectedThread,
+      selectedThreadDetailLoading,
       selectedThreadProject,
       selectedEnvironmentConnection,
       selectedEnvironmentRuntime,
@@ -125,6 +131,7 @@ function useResolvedThreadSelection() {
       selectedEnvironmentConnection,
       selectedEnvironmentRuntime,
       selectedThread,
+      selectedThreadDetailLoading,
       selectedThreadProject,
       selectedThreadRef,
     ],
