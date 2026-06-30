@@ -1,7 +1,8 @@
 import type { EnvironmentId, ProjectListEntriesResult } from "@t3tools/contracts";
 import { SymbolView } from "expo-symbols";
-import { useCallback, useMemo, useState, type ComponentProps } from "react";
+import { useCallback, useId, useMemo, useState, type ComponentProps } from "react";
 import { Platform, Pressable, useColorScheme, View, type NativeSyntheticEvent } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import {
   Screen,
   ScreenStack,
@@ -27,6 +28,8 @@ export function ThreadFileNavigatorPane(props: {
   readonly onSelectFile: (path: string) => void;
 }) {
   const [searchQuery, setSearchQuery] = useState("");
+  const instanceId = useId();
+  const insets = useSafeAreaInsets();
   const colorScheme = useColorScheme();
   const highlightTheme = colorScheme === "dark" ? "dark" : "light";
   const iconColor = String(useThemeColor("--color-icon-muted"));
@@ -68,6 +71,8 @@ export function ThreadFileNavigatorPane(props: {
     [entriesQuery.refresh, foregroundColor],
   );
 
+  const nativeHeaderInset = Platform.OS === "ios" ? insets.top + 76 : 0;
+
   const fileTree = (
     <FileTreeBrowser
       entries={entriesData?.entries ?? []}
@@ -75,6 +80,7 @@ export function ThreadFileNavigatorPane(props: {
       isPending={entriesQuery.isPending}
       searchQuery={searchQuery}
       selectedPath={props.selectedPath}
+      topContentInset={nativeHeaderInset}
       onPreviewFile={handlePreviewFile}
       onRefresh={entriesQuery.refresh}
       onSelectFile={props.onSelectFile}
@@ -89,7 +95,7 @@ export function ThreadFileNavigatorPane(props: {
             activityState={2}
             enabled
             isNativeStack
-            screenId="thread-file-navigator-native"
+            screenId={`thread-file-navigator-native-${instanceId}`}
             scrollEdgeEffects={{
               bottom: "hidden",
               left: "hidden",

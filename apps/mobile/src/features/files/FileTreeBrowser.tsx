@@ -109,6 +109,7 @@ export function FileTreeBrowser(props: {
   readonly isPending: boolean;
   readonly searchQuery: string;
   readonly selectedPath: string | null;
+  readonly topContentInset?: number;
   readonly onPreviewFile?: (path: string) => void;
   readonly onRefresh: () => void;
   readonly onSelectFile: (path: string) => void;
@@ -236,7 +237,10 @@ export function FileTreeBrowser(props: {
           maxToRenderPerBatch={FILE_TREE_RENDER_BATCH_SIZE}
           updateCellsBatchingPeriod={16}
           windowSize={5}
-          contentContainerStyle={{ paddingVertical: 8 }}
+          contentContainerStyle={{
+            paddingBottom: 8,
+            paddingTop: 8 + (props.topContentInset ?? 0),
+          }}
           refreshControl={
             <RefreshControl refreshing={props.isPending} onRefresh={props.onRefresh} />
           }
